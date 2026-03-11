@@ -1,8 +1,10 @@
 /broom
+/broom-*
 *.exe
 *.test
 *.out
 /vendor/
 .idea/
+.cursor/
 *.swp
 config.yaml
