@@ -16,7 +16,7 @@ broom/
 │   ├── config/                 # broom.yaml、proxies.txt 读写；ConfigDirPath = ~/.config/broom
 │   ├── daemon/                 # PID 文件（broom.pid），供 stop 发 SIGTERM
 │   ├── proxy/
-│   │   ├── server.go           # HTTP CONNECT + SOCKS5 服务；UpstreamDialer(uri, skipTLSVerify)
+│   │   ├── server.go           # 本地代理：HTTP（CONNECT + 普通 GET/POST 转发）+ SOCKS5；出站经 UpstreamDialer
 │   │   ├── trojan.go           # Trojan 拨号（TLS + 首包）；支持 skipTLSVerify
 │   │   ├── selector.go         # SelectBest：测速、多目标回退、过滤 127.0.0.1
 │   │   ├── host.go             # 从 URI 解析 proxy server host，isProxyServerLocalhost
@@ -56,12 +56,14 @@ go build -o broom ./cmd/broom
 | 过滤本地节点 | `internal/proxy/host.go`：isProxyServerLocalhost；`selector.SelectBest` 先过滤再测速 |
 | 后台运行 | `--daemon`：当前进程 re-exec 子进程并设 BROOM_DAEMON_CHILD/GLOBAL/AUTO_SELECT/INSECURE，子进程 stdout/stderr 重定向到 daemon.log |
 | 命令行代理（非 macOS） | 不设桌面/系统代理；提示用户在当前 shell 执行 `eval $(broom env)` 设置 http_proxy/https_proxy/all_proxy；`broom env` 输出 export 行，端口来自 config |
+| curl 走 HTTP 代理 GET | `internal/proxy/server.go`：支持 `GET http(s)://host/path` 的普通代理请求；使用 `http.Client` + `Transport.DialContext=s.Dialer` 兼容 HTTP/2；不自动跟随 3xx（curl 用 `-L`） |
 
 ## 命令行代理用法（写进 README / 文档时）
 
 - Broom 是**命令行工具**，Linux/Windows 下不改系统或桌面代理。
 - 用户启动 `broom start`（或 `broom start --global`）后，在当前 shell 执行 **`eval $(broom env)`** 即可让该会话的 curl、git、npm 等走代理。
 - 取消代理：`unset http_proxy https_proxy all_proxy`。单独 `broom env` 只打印 export 行。新终端需再次执行或写入 `.bashrc`/`.zshrc`。
+- 对会从 http 跳转到 https 的站点（如 `reddit.com`、`youtube.com`），用 `curl -L` 跟随重定向；broom 会把 301/302 原样返回给 curl。
 
 ## 修改时注意
 
