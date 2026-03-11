@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -31,7 +32,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(subCmd, startCmd, stopCmd)
+	rootCmd.AddCommand(subCmd, startCmd, stopCmd, envCmd)
 }
 
 var subCmd = &cobra.Command{
@@ -88,7 +89,7 @@ func runSubUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-var global, autoSelect, skipTLSVerify bool
+var global, autoSelect, skipTLSVerify, daemonMode bool
 
 var startCmd = &cobra.Command{
 	Use:   "start",
@@ -100,9 +101,21 @@ func init() {
 	startCmd.Flags().BoolVar(&global, "global", false, "全局模式：设置系统代理，使所有流量走代理")
 	startCmd.Flags().BoolVar(&autoSelect, "auto-select", false, "自动选择节点：对全部节点测速，选用延迟最低的节点")
 	startCmd.Flags().BoolVar(&skipTLSVerify, "insecure", false, "跳过 TLS 证书校验（部分机场证书与域名不一致时使用，有安全风险）")
+	startCmd.Flags().BoolVar(&daemonMode, "daemon", false, "后台服务方式运行（脱离终端，可用 broom stop 停止）")
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
+	// 若以 --daemon 启动且当前不是已拉起的子进程，则 re-exec 为后台进程后退出
+	if daemonMode && os.Getenv("BROOM_DAEMON_CHILD") != "1" {
+		return runAsDaemonParent()
+	}
+	// 从环境恢复 daemon 子进程的启动参数
+	if os.Getenv("BROOM_DAEMON_CHILD") == "1" {
+		global = os.Getenv("BROOM_GLOBAL") == "1"
+		autoSelect = os.Getenv("BROOM_AUTO_SELECT") == "1"
+		skipTLSVerify = os.Getenv("BROOM_INSECURE") == "1"
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -189,10 +202,81 @@ func runStart(cmd *cobra.Command, args []string) error {
 		fmt.Printf("代理模式：请将应用代理设为 HTTP 127.0.0.1:%d 或 SOCKS5 127.0.0.1:%d\n", cfg.HTTPPort, cfg.SOCKSPort)
 	}
 
-	fmt.Printf("broom 已启动，按 Ctrl+C 退出\n")
+	if os.Getenv("BROOM_DAEMON_CHILD") != "1" {
+		fmt.Printf("broom 已启动，按 Ctrl+C 退出\n")
+	}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+	return nil
+}
+
+// runAsDaemonParent 以当前进程拉起后台子进程后退出；子进程通过环境变量继承 global/auto-select/insecure。
+func runAsDaemonParent() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("获取可执行路径失败: %w", err)
+	}
+	configDir, err := config.ConfigDirPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(configDir, "daemon.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("打开日志文件失败: %w", err)
+	}
+	defer logFile.Close()
+
+	env := append(os.Environ(),
+		"BROOM_DAEMON_CHILD=1",
+		"BROOM_GLOBAL="+boolEnv(global),
+		"BROOM_AUTO_SELECT="+boolEnv(autoSelect),
+		"BROOM_INSECURE="+boolEnv(skipTLSVerify),
+	)
+	c := exec.Cmd{
+		Path:   executable,
+		Args:   []string{filepath.Base(executable), "start"},
+		Env:    env,
+		Dir:    configDir,
+		Stdout: logFile,
+		Stderr: logFile,
+	}
+	if err := c.Start(); err != nil {
+		return fmt.Errorf("后台启动失败: %w", err)
+	}
+	// 子进程已脱离，本进程退出；停止用 broom stop
+	fmt.Printf("broom 已在后台启动，PID %d\n", c.Process.Pid)
+	fmt.Printf("日志: %s\n", logPath)
+	fmt.Println("停止: broom stop")
+	os.Exit(0)
+	return nil
+}
+
+func boolEnv(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+var envCmd = &cobra.Command{
+	Use:   "env",
+	Short: "Output shell export for proxy (eval $(broom env) to enable in current shell)",
+	RunE:  runEnv,
+}
+
+func runEnv(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.EnsurePorts()
+	fmt.Printf("export http_proxy=http://127.0.0.1:%d https_proxy=http://127.0.0.1:%d all_proxy=socks5://127.0.0.1:%d\n",
+		cfg.HTTPPort, cfg.HTTPPort, cfg.SOCKSPort)
 	return nil
 }
 
