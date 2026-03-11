@@ -119,10 +119,6 @@ eval $(broom env)
 ```
 
 This sets `http_proxy`, `https_proxy`, and `all_proxy` (SOCKS5) to `127.0.0.1` with ports from your config. To disable: `unset http_proxy https_proxy all_proxy`. Use `broom env` alone to just print the export line. For a new terminal session, run `eval $(broom env)` again or add it to your shell rc (e.g. `.bashrc`).
-</think>
-正在更新中文版 README 的对应说明：
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-Grep
 
 - **Foreground**: press **Ctrl+C** in the terminal running `broom start`.
 - **Daemon or other terminal**: run `broom stop`.

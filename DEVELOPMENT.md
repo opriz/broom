@@ -104,6 +104,26 @@
   - **VMess**：Merkur 内部做 TLS，无法直接改配置；在传入 Merkur 前对 `vmess://` 链接做重写：Base64 解码 JSON → 写入 `allowInsecure` / `skipCertVerify` → 再编码，若 Merkur 识别这些字段则可跳过校验。
 - **入口**：配置项 `skip_tls_verify: true` 或命令行 `--insecure`，与 `--global`、`--auto-select` 可组合使用。
 
+### 5.4 命令行使用 HTTP 代理时报错（`curl ipinfo.io` / `curl youtube.com`）
+
+- **现象 1**：设置了 `http_proxy=http://127.0.0.1:7890` 后执行 `curl ipinfo.io`，broom 返回 `broom: use CONNECT or SOCKS5`。
+- **原因**：curl 通过 HTTP 代理访问纯 HTTP 目标时，会发送形如 `GET http://example.com/ HTTP/1.1` 的**普通代理请求**（非 CONNECT）。而早期 broom 的 HTTP 代理仅支持 `CONNECT`，对普通请求直接返回 400。
+- **修复**：在 `internal/proxy/server.go` 中新增普通 HTTP 代理请求的转发处理：
+  - 使用 `http.Client` + 自定义 `Transport.DialContext = s.Dialer`，让标准库接管 TLS/ALPN，从而兼容 HTTP/1.1 与 HTTP/2。
+  - 对客户端发来的 `GET http://host/`（常见为无端口的 http URL），会按 HTTPS 目标访问（便于兼容“仅 HTTPS/仅 HTTP/2”站点）。
+
+- **现象 2**：`curl -v reddit.com` / `curl -v youtube.com` 出现 502，body 为 `EOF` 或 `unexpected EOF`。
+- **原因**：
+  1. 部分站点（如 YouTube）强依赖 HTTP/2 或对协议协商较敏感；手写 `tls.Client` 并强制 HTTP/1.1 容易被对端直接断开。
+  2. 站点会从 http 跳转到 https（301/302），如果代理端“自动跟随重定向”，会让一次请求链条变复杂、且更容易触发对端断连，导致 EOF。
+- **修复**：
+  - 使用 `http.Client` 的标准实现以支持 HTTP/2。
+  - **不在代理端自动跟随重定向**（`CheckRedirect: http.ErrUseLastResponse`），把 301/302 和 `Location` 原样返回给 curl，由 curl 通过 `-L` 继续访问；下一跳为 `https://...` 时通常会走 `CONNECT host:443` 隧道，更稳定。
+
+- **验证建议**：
+  - `eval $(broom env)` 后，用 `curl -v` 观察 `Uses proxy env variable ...` 与响应是否为 301/302。
+  - 对有跳转的网站，用 `curl -vL reddit.com` / `curl -vL youtube.com` 跟随跳转，确认最终页面可返回。
+
 ---
 
 ## 六、项目结构概览
