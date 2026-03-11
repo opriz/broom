@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/zhujian/broom/internal/config"
@@ -87,7 +88,7 @@ func runSubUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-var global bool
+var global, autoSelect, skipTLSVerify bool
 
 var startCmd = &cobra.Command{
 	Use:   "start",
@@ -97,6 +98,8 @@ var startCmd = &cobra.Command{
 
 func init() {
 	startCmd.Flags().BoolVar(&global, "global", false, "全局模式：设置系统代理，使所有流量走代理")
+	startCmd.Flags().BoolVar(&autoSelect, "auto-select", false, "自动选择节点：对全部节点测速，选用延迟最低的节点")
+	startCmd.Flags().BoolVar(&skipTLSVerify, "insecure", false, "跳过 TLS 证书校验（部分机场证书与域名不一致时使用，有安全风险）")
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
@@ -105,6 +108,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	cfg.EnsurePorts()
+	if autoSelect {
+		cfg.AutoSelectNode = true
+	}
+	if skipTLSVerify {
+		cfg.SkipTLSVerify = true
+	}
 
 	// 加载代理列表（若没有则尝试从订阅拉取）
 	urls, err := config.LoadProxies()
@@ -119,19 +128,39 @@ func runStart(cmd *cobra.Command, args []string) error {
 		_ = config.SaveProxies(urls)
 	}
 
-	// 选用第一个可用的上游代理（Merkur 支持 ss/vmess/ssr）
+	// 选用上游代理：自动选择时测速取最快，否则取第一个可用
 	var dialer func(ctx context.Context, network, addr string) (net.Conn, error)
-	for _, u := range urls {
-		d, err := proxy.UpstreamDialer(u)
-		if err != nil {
-			continue
+	var chosenURI string
+	if cfg.AutoSelectNode {
+		testURL := cfg.TestURL
+		if testURL == "" {
+			testURL = proxy.DefaultTestURL
 		}
-		dialer = d
-		break
+		best, latency, err := proxy.SelectBest(urls, testURL, 20*time.Second, cfg.SkipTLSVerify)
+		if err != nil {
+			return fmt.Errorf("自动选择节点失败: %w", err)
+		}
+		chosenURI = best
+		dialer, err = proxy.UpstreamDialer(best, cfg.SkipTLSVerify)
+		if err != nil {
+			return fmt.Errorf("使用选中节点失败: %w", err)
+		}
+		fmt.Printf("自动选择节点完成，延迟 %v，共 %d 个节点\n", latency.Round(time.Millisecond), len(urls))
+	} else {
+		for _, u := range urls {
+			d, err := proxy.UpstreamDialer(u, cfg.SkipTLSVerify)
+			if err != nil {
+				continue
+			}
+			dialer = d
+			chosenURI = u
+			break
+		}
 	}
 	if dialer == nil {
-		return fmt.Errorf("订阅中无受支持的代理节点（broom 支持 ss://、vmess://、ssr://）")
+		return fmt.Errorf("订阅中无受支持的代理节点（broom 支持 ss://、vmess://、ssr://、trojan://）")
 	}
+	_ = chosenURI
 
 	svc := &proxy.Server{
 		Dialer:    dialer,

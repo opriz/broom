@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -196,9 +197,16 @@ func (s *Server) handleSOCKS5(client net.Conn) {
 	_, _ = io.Copy(client, remote)
 }
 
-// UpstreamDialer 从代理 URI 构造一个可用于 Server.Dialer 的拨号函数（支持 ss://、vmess://、ssr://）
-func UpstreamDialer(proxyURI string) (func(context.Context, string, string) (net.Conn, error), error) {
-	dialer := merkur.NewProxyDialer(proxyURI)
+// UpstreamDialer 从代理 URI 构造拨号函数。skipTLSVerify 为 true 时 Trojan/VMess 连接不校验服务端证书。
+func UpstreamDialer(proxyURI string, skipTLSVerify bool) (func(context.Context, string, string) (net.Conn, error), error) {
+	if isTrojanURI(proxyURI) {
+		return trojanDialer(proxyURI, skipTLSVerify)
+	}
+	uri := proxyURI
+	if skipTLSVerify && strings.HasPrefix(proxyURI, "vmess://") {
+		uri = vmessURIWithInsecure(proxyURI)
+	}
+	dialer := merkur.NewProxyDialer(uri)
 	if dialer == nil {
 		return nil, fmt.Errorf("unsupported or invalid proxy: %s", maskURI(proxyURI))
 	}

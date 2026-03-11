@@ -68,6 +68,39 @@ broom start --global
 
 在 macOS 上会自动设置/取消系统 HTTP(S) 代理；退出或执行 `broom stop` 后会关闭系统代理。
 
+### 自动选择节点
+
+订阅中若有多个节点，可让 broom 在启动时对全部节点测速（TCP 连接延迟），自动选用**延迟最低**的节点：
+
+```bash
+broom start --auto-select
+broom start --global --auto-select
+```
+
+或在配置文件中开启（`~/.config/broom/broom.yaml`）：
+
+```yaml
+auto_select_node: true
+# test_url: "www.gstatic.com:443"  # 可选，测速目标，默认即为此
+```
+
+未开启时，broom 使用节点列表中的**第一个可用**节点。
+
+### 跳过 TLS 证书校验
+
+部分机场的节点证书与连接域名不一致（如证书为 `openssl.nodesni.com`、连接为 `cave-hk.xxx.com`），会报 `x509: certificate is valid for ... not ...`。可开启「跳过证书校验」以兼容（有中间人风险，仅建议在可信网络下使用）。Trojan 会直接跳过 TLS 校验，VMess 会在链接中写入 `allowInsecure` 供底层库使用：
+
+```bash
+broom start --insecure
+broom start --global --auto-select --insecure
+```
+
+或在配置中设置：
+
+```yaml
+skip_tls_verify: true
+```
+
 ### 停止代理
 
 - 在运行 `broom start` 的终端按 **Ctrl+C** 退出；
@@ -90,6 +123,9 @@ broom stop
 subscription_url: "https://..."
 http_port: 7890
 socks_port: 7891
+auto_select_node: false   # 设为 true 则启动时测速并选用最快节点
+test_url: "www.gstatic.com:443"  # 自动选择时的测速目标（可选）
+skip_tls_verify: false    # 设为 true 可跳过 TLS 证书校验（部分机场需开启）
 ```
 
 ## 支持的协议
@@ -97,8 +133,9 @@ socks_port: 7891
 - **Shadowsocks**（`ss://`）
 - **VMess**（`vmess://`）
 - **ShadowsocksR**（`ssr://`）
+- **Trojan**（`trojan://`）
 
-订阅中若包含 Trojan 等其它类型，会尝试转换；实际出站依赖 [Merkur](https://github.com/Qingluan/merkur) 的解析与拨号能力。
+其中 ss/vmess/ssr 出站依赖 [Merkur](https://github.com/Qingluan/merkur)，trojan 为内置实现。
 
 ## 命令一览
 
@@ -108,6 +145,8 @@ socks_port: 7891
 | `broom sub update` | 拉取订阅并更新本地节点列表 |
 | `broom start` | 启动代理（代理模式） |
 | `broom start --global` | 启动代理并设为系统代理（全局模式） |
+| `broom start --auto-select` | 启动时对全部节点测速，选用延迟最低的节点 |
+| `broom start --insecure` | 跳过 TLS 证书校验（证书与域名不一致时使用） |
 | `broom stop` | 停止已运行的代理并关闭系统代理 |
 
 ## License

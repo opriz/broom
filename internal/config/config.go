@@ -20,6 +20,11 @@ type BroomConfig struct {
 	SubscriptionURL string `yaml:"subscription_url"`
 	HTTPPort        int    `yaml:"http_port,omitempty"`
 	SOCKSPort       int    `yaml:"socks_port,omitempty"`
+	// 自动选择节点：启动时对全部节点测速，选用延迟最低的节点
+	AutoSelectNode bool   `yaml:"auto_select_node,omitempty"`
+	TestURL        string `yaml:"test_url,omitempty"` // 测速目标，默认 www.gstatic.com:443
+	// 跳过 TLS 证书校验（部分机场证书与域名不一致时可开启，有安全风险）
+	SkipTLSVerify bool `yaml:"skip_tls_verify,omitempty"`
 }
 
 func (c *BroomConfig) EnsurePorts() {

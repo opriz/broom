@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -77,12 +79,38 @@ func isClashYAML(b []byte) bool {
 	return strings.Contains(s, "proxies:") || strings.Contains(s, "proxy-groups:")
 }
 
+// flexiblePort 兼容 Clash 里 port 为数字或字符串
+type flexiblePort int
+
+func (p *flexiblePort) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var v interface{}
+	if err := unmarshal(&v); err != nil {
+		return err
+	}
+	switch x := v.(type) {
+	case int:
+		*p = flexiblePort(x)
+		return nil
+	case string:
+		n, err := strconv.Atoi(x)
+		if err != nil {
+			return err
+		}
+		*p = flexiblePort(n)
+		return nil
+	default:
+		return fmt.Errorf("port must be int or string")
+	}
+}
+
+func (p flexiblePort) Int() int { return int(p) }
+
 // Clash 的 proxy 项（只取常用字段）
 type clashProxy struct {
-	Name   string `yaml:"name"`
-	Type   string `yaml:"type"`
-	Server string `yaml:"server"`
-	Port   int    `yaml:"port"`
+	Name   string       `yaml:"name"`
+	Type   string       `yaml:"type"`
+	Server string       `yaml:"server"`
+	Port   flexiblePort `yaml:"port"`
 	// SS
 	Password string `yaml:"password"`
 	Cipher   string `yaml:"cipher"`
@@ -131,24 +159,24 @@ func clashProxyToURI(p clashProxy) (string, error) {
 }
 
 func clashSSToURI(p clashProxy) (string, error) {
-	if p.Server == "" || p.Port == 0 || p.Password == "" || p.Cipher == "" {
+	if p.Server == "" || p.Port.Int() == 0 || p.Password == "" || p.Cipher == "" {
 		return "", fmt.Errorf("incomplete ss proxy")
 	}
 	// ss://base64(method:password)@server:port
 	userInfo := p.Cipher + ":" + p.Password
 	encoded := base64.StdEncoding.EncodeToString([]byte(userInfo))
-	return "ss://" + encoded + "@" + p.Server + ":" + fmt.Sprintf("%d", p.Port), nil
+	return "ss://" + encoded + "@" + p.Server + ":" + fmt.Sprintf("%d", p.Port.Int()), nil
 }
 
 func clashVMessToURI(p clashProxy) (string, error) {
-	if p.Server == "" || p.Port == 0 || p.UUID == "" {
+	if p.Server == "" || p.Port.Int() == 0 || p.UUID == "" {
 		return "", fmt.Errorf("incomplete vmess proxy")
 	}
 	v := map[string]interface{}{
 		"v":    "2",
 		"ps":   p.Name,
 		"add":  p.Server,
-		"port": p.Port,
+		"port": p.Port.Int(),
 		"id":   p.UUID,
 		"aid":  p.AlterID,
 		"net":  "tcp",
@@ -160,9 +188,9 @@ func clashVMessToURI(p clashProxy) (string, error) {
 }
 
 func clashTrojanToURI(p clashProxy) (string, error) {
-	if p.Server == "" || p.Port == 0 || p.Password == "" {
+	if p.Server == "" || p.Port.Int() == 0 || p.Password == "" {
 		return "", fmt.Errorf("incomplete trojan proxy")
 	}
 	// trojan://password@server:port
-	return "trojan://" + p.Password + "@" + p.Server + ":" + fmt.Sprintf("%d", p.Port), nil
+	return "trojan://" + url.QueryEscape(p.Password) + "@" + p.Server + ":" + fmt.Sprintf("%d", p.Port.Int()), nil
 }
